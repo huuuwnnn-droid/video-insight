@@ -1,3 +1,8 @@
+---
+name: video-insight
+description: Cross-platform video transcript extraction and optional AI summarization for YouTube and Bilibili. GPU auto-detect. Transcript-first with opt-in LLM summary.
+---
+
 # video-insight
 
 Cross-platform video transcript extraction and optional AI summarization for YouTube and Bilibili.
