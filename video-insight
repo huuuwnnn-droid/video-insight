@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# video-insight — thin wrapper: activate venv, detect GPU, dispatch to cli.py
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="${SKILL_DIR}/.venv"
+SCRIPTS_DIR="${SKILL_DIR}/scripts"
+
+# ── Resolve Python interpreter ──
+if [ -f "${VENV_DIR}/bin/python3" ]; then
+    PYTHON="${VENV_DIR}/bin/python3"
+elif [ -f "${VENV_DIR}/Scripts/python.exe" ]; then
+    PYTHON="${VENV_DIR}/Scripts/python.exe"
+else
+    PYTHON="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    if [ -z "$PYTHON" ]; then
+        echo '{"ok":false,"data":null,"error":"Python3 not found. Run setup.sh first."}' >&2
+        exit 1
+    fi
+fi
+
+# ── GPU detection (lightweight, no torch) ──
+if [ -z "${WHISPER_DEVICE:-}" ]; then
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+        # nvidia-smi exists and works — try ctranslate2 confirmation
+        if "$PYTHON" -c "import ctranslate2; ctranslate2.get_supported_compute_types('cuda')" >/dev/null 2>&1; then
+            export WHISPER_DEVICE="cuda"
+        else
+            export WHISPER_DEVICE="cpu"
+            echo "[video-insight] nvidia-smi found but ctranslate2 CUDA unavailable, using CPU" >&2
+        fi
+    else
+        export WHISPER_DEVICE="cpu"
+    fi
+fi
+
+# ── CUDA library paths (dynamic, not hardcoded) ──
+if [ "$WHISPER_DEVICE" = "cuda" ]; then
+    CUDA_EXTRA=""
+    # Common CUDA lib locations — discovered dynamically
+    for candidate in /usr/local/cuda/lib64 /usr/lib/wsl/lib /usr/lib/x86_64-linux-gnu; do
+        if [ -d "$candidate" ] && ls "$candidate"/libcublas* >/dev/null 2>&1; then
+            CUDA_EXTRA="${CUDA_EXTRA:+$CUDA_EXTRA:}$candidate"
+        fi
+    done
+    # Also check pip-installed nvidia packages
+    SITE_PKGS=$("$PYTHON" -c "import site; print(':'.join(p for p in site.getsitepackages()))" 2>/dev/null || true)
+    if [ -n "$SITE_PKGS" ]; then
+        IFS=: read -ra SP_DIRS <<< "$SITE_PKGS"
+        for sp in "${SP_DIRS[@]}"; do
+            for nv in "$sp"/nvidia/cublas/lib "$sp"/nvidia/cudnn/lib; do
+                [ -d "$nv" ] && CUDA_EXTRA="${CUDA_EXTRA:+$CUDA_EXTRA:}$nv"
+            done
+        done
+    fi
+    if [ -n "$CUDA_EXTRA" ]; then
+        export LD_LIBRARY_PATH="${CUDA_EXTRA}:${LD_LIBRARY_PATH:-}"
+    fi
+fi
+
+exec "$PYTHON" "${SCRIPTS_DIR}/cli.py" "$@"
